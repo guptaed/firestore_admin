@@ -28,10 +28,11 @@ class FirestoreAdminService {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Known collections from the vietfuelprocapp project
-  // Firestore doesn't provide a way to list all collections at root level
-  // without using the Admin SDK, so we maintain a list of known collections
-  static const List<String> knownCollections = [
+  // Config document path for storing collection names
+  static const String _configDocPath = '_config/collections';
+
+  // Default collections (fallback if Firestore config doesn't exist)
+  static const List<String> _defaultCollections = [
     'Suppliers',
     'SupplierHistory',
     'Announcements',
@@ -40,14 +41,75 @@ class FirestoreAdminService {
     'Contracts',
     'Banks',
     'CreditChecks',
+    'CreditCheckHistory',
     'Smartphoneaccess',
     'BidFlows',
     'audit_trails',
   ];
 
+  // Dynamic list of collections (loaded from Firestore)
+  List<String> _collections = [];
+  bool _collectionsLoaded = false;
+
   /// Get all known root collections
   List<String> getRootCollections() {
-    return List.from(knownCollections);
+    if (!_collectionsLoaded) {
+      return List.from(_defaultCollections);
+    }
+    return List.from(_collections);
+  }
+
+  /// Load collections from Firestore config document
+  /// Falls back to default list if document doesn't exist
+  Future<List<String>> loadCollections() async {
+    try {
+      final doc = await _firestore.doc(_configDocPath).get();
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        if (data['names'] is List) {
+          _collections = List<String>.from(data['names']);
+          _collectionsLoaded = true;
+          return _collections;
+        }
+      }
+    } catch (e) {
+      // Fall back to defaults on error
+    }
+
+    // If no config exists, create it with defaults
+    _collections = List.from(_defaultCollections);
+    _collectionsLoaded = true;
+    await _saveCollectionsToFirestore();
+    return _collections;
+  }
+
+  /// Save collections list to Firestore
+  Future<void> _saveCollectionsToFirestore() async {
+    await _firestore.doc(_configDocPath).set({
+      'names': _collections,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Add a new collection to the list
+  Future<void> addCollection(String name) async {
+    if (!_collections.contains(name)) {
+      _collections.add(name);
+      _collections.sort();
+      await _saveCollectionsToFirestore();
+    }
+  }
+
+  /// Remove a collection from the list
+  Future<void> removeCollection(String name) async {
+    _collections.remove(name);
+    await _saveCollectionsToFirestore();
+  }
+
+  /// Refresh collections from Firestore
+  Future<List<String>> refreshCollections() async {
+    _collectionsLoaded = false;
+    return loadCollections();
   }
 
   /// Stream documents in a collection
@@ -303,8 +365,9 @@ class FirestoreAdminService {
 
     final results = <SearchResult>[];
     final lowerSearchTerm = searchTerm.toLowerCase();
+    final collectionsToSearch = _collectionsLoaded ? _collections : _defaultCollections;
 
-    for (final collection in knownCollections) {
+    for (final collection in collectionsToSearch) {
       try {
         final snapshot = await _firestore.collection(collection).get();
 

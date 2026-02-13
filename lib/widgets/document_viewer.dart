@@ -271,18 +271,22 @@ class DocumentViewer extends StatelessWidget {
     );
   }
 
-  Widget _buildNestedValue(BuildContext context, dynamic value, String type) {
+  Widget _buildNestedValue(BuildContext context, dynamic value, String type, {int depth = 0}) {
     if (type == 'array' && value is List) {
       return ExpansionTile(
         title: Text('[${value.length} items]'),
         tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.only(left: 16.0 + (depth * 8)),
         children: value.asMap().entries.map((entry) {
           final index = entry.key;
           final item = entry.value;
           final itemType = FirestoreAdminService.getFieldType(item);
+          final isNested = itemType == 'map' || itemType == 'array';
+
           return Padding(
-            padding: const EdgeInsets.only(left: 16),
+            padding: const EdgeInsets.symmetric(vertical: 2),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
                   width: 50,
@@ -301,10 +305,15 @@ class DocumentViewer extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: Text(
-                    FirestoreAdminService.formatValue(item),
-                    style: const TextStyle(fontFamily: 'monospace'),
-                  ),
+                  child: isNested
+                      ? _buildNestedValue(context, item, itemType, depth: depth + 1)
+                      : Text(
+                          FirestoreAdminService.formatValue(item),
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            color: _getValueColor(context, item),
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -317,11 +326,15 @@ class DocumentViewer extends StatelessWidget {
       return ExpansionTile(
         title: Text('{${value.length} fields}'),
         tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.only(left: 16.0 + (depth * 8)),
         children: value.entries.map((entry) {
           final itemType = FirestoreAdminService.getFieldType(entry.value);
+          final isNested = itemType == 'map' || itemType == 'array';
+
           return Padding(
-            padding: const EdgeInsets.only(left: 16),
+            padding: const EdgeInsets.symmetric(vertical: 2),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
                   width: 150,
@@ -340,10 +353,15 @@ class DocumentViewer extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: Text(
-                    FirestoreAdminService.formatValue(entry.value),
-                    style: const TextStyle(fontFamily: 'monospace'),
-                  ),
+                  child: isNested
+                      ? _buildNestedValue(context, entry.value, itemType, depth: depth + 1)
+                      : Text(
+                          FirestoreAdminService.formatValue(entry.value),
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            color: _getValueColor(context, entry.value),
+                          ),
+                        ),
                 ),
               ],
             ),

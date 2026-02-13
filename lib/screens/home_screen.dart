@@ -33,6 +33,42 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _descending = false;
   int? _queryLimit;
 
+  // Collections loading state
+  bool _collectionsLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCollections();
+  }
+
+  Future<void> _loadCollections() async {
+    setState(() => _collectionsLoading = true);
+    try {
+      await _service.loadCollections();
+    } finally {
+      if (mounted) {
+        setState(() => _collectionsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _refreshCollections() async {
+    setState(() => _collectionsLoading = true);
+    try {
+      await _service.refreshCollections();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Collections refreshed')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _collectionsLoading = false);
+      }
+    }
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -201,10 +237,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
-            onPressed: () {
-              setState(() {});
-            },
+            tooltip: 'Refresh Collections',
+            onPressed: _refreshCollections,
           ),
         ],
       ),
@@ -235,13 +269,55 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Theme.of(context).colorScheme.primary,
                         ),
                         const SizedBox(width: 8),
-                        const Text(
-                          'Collections',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                        const Expanded(
+                          child: Text(
+                            'Collections',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
                           ),
                         ),
+                        if (_collectionsLoading)
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        else
+                          PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert, size: 20),
+                            tooltip: 'Manage Collections',
+                            onSelected: (value) {
+                              if (value == 'add') {
+                                _showAddCollectionDialog();
+                              } else if (value == 'manage') {
+                                _showManageCollectionsDialog();
+                              }
+                            },
+                            itemBuilder: (context) => [
+                              const PopupMenuItem(
+                                value: 'add',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.add, size: 20),
+                                    SizedBox(width: 8),
+                                    Text('Add Collection'),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'manage',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.settings, size: 20),
+                                    SizedBox(width: 8),
+                                    Text('Manage Collections'),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                       ],
                     ),
                   ),
@@ -632,6 +708,141 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  void _showAddCollectionDialog() {
+    final controller = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Collection'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Collection Name',
+            hintText: 'e.g., Orders, Products',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          onSubmitted: (value) async {
+            if (value.trim().isNotEmpty) {
+              Navigator.pop(context);
+              await _service.addCollection(value.trim());
+              setState(() {});
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Collection "${value.trim()}" added')),
+                );
+              }
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(context);
+                await _service.addCollection(name);
+                setState(() {});
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Collection "$name" added')),
+                  );
+                }
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showManageCollectionsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final collections = _service.getRootCollections();
+          return AlertDialog(
+            title: const Text('Manage Collections'),
+            content: SizedBox(
+              width: 400,
+              height: 400,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Collections are stored in Firestore at _config/collections',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: collections.length,
+                      itemBuilder: (context, index) {
+                        final collection = collections[index];
+                        return ListTile(
+                          leading: const Icon(Icons.folder),
+                          title: Text(collection),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: 'Remove from list',
+                            onPressed: () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Remove Collection?'),
+                                  content: Text(
+                                    'Remove "$collection" from the list?\n\n'
+                                    'This only removes it from the app\'s collection list. '
+                                    'The actual Firestore collection and its data will NOT be deleted.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    FilledButton(
+                                      onPressed: () => Navigator.pop(context, true),
+                                      child: const Text('Remove'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true) {
+                                await _service.removeCollection(collection);
+                                setDialogState(() {});
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
