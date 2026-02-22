@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/firestore_admin_service.dart';
 import '../widgets/collection_tree.dart';
 import '../widgets/document_viewer.dart';
@@ -58,9 +59,9 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await _service.refreshCollections();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Collections refreshed')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Collections refreshed')));
       }
     } finally {
       if (mounted) {
@@ -159,9 +160,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _isSearchLoading = false;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Search error: $e')));
       }
     }
   }
@@ -188,14 +189,20 @@ class _HomeScreenState extends State<HomeScreen> {
             SizedBox(width: 8),
             Text(
               '- vietfuelprocapp',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.normal,
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.normal),
             ),
           ],
         ),
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: Text(
+                FirebaseAuth.instance.currentUser?.email ?? '',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
           // Search bar
           SizedBox(
             width: 300,
@@ -217,7 +224,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     borderSide: BorderSide.none,
                   ),
                   filled: true,
-                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  fillColor: Theme.of(
+                    context,
+                  ).colorScheme.surfaceContainerHighest,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                   isDense: true,
                 ),
@@ -240,6 +249,13 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Refresh Collections',
             onPressed: _refreshCollections,
           ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+            },
+          ),
         ],
       ),
       body: Row(
@@ -255,7 +271,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(12),
                         topRight: Radius.circular(12),
@@ -327,7 +345,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       service: _service,
                       onDocumentSelected: _onDocumentSelected,
                       onCollectionSelected: _onCollectionSelected,
-                      selectedPath: _selectedDocumentPath ?? _selectedCollectionPath,
+                      selectedPath:
+                          _selectedDocumentPath ?? _selectedCollectionPath,
                     ),
                   ),
                 ],
@@ -415,9 +434,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           Text(
             'Click on a document in the tree to view its contents',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.outline,
-            ),
+            style: TextStyle(color: Theme.of(context).colorScheme.outline),
           ),
           const SizedBox(height: 24),
           Row(
@@ -525,7 +542,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       ? Theme.of(context).colorScheme.primary
                       : null,
                 ),
-                tooltip: _showQueryBuilder ? 'Hide Query Builder' : 'Show Query Builder',
+                tooltip: _showQueryBuilder
+                    ? 'Hide Query Builder'
+                    : 'Show Query Builder',
                 onPressed: () {
                   setState(() => _showQueryBuilder = !_showQueryBuilder);
                 },
@@ -534,7 +553,10 @@ class _HomeScreenState extends State<HomeScreen> {
               if (_hasActiveQuery && !_showQueryBuilder)
                 Container(
                   margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(12),
@@ -546,7 +568,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         'Query Active',
                         style: TextStyle(
                           fontSize: 11,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -555,7 +579,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Icon(
                           Icons.close,
                           size: 14,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                         ),
                       ),
                     ],
@@ -627,9 +653,7 @@ class _HomeScreenState extends State<HomeScreen> {
               }
 
               if (!snapshot.hasData) {
-                return const Center(
-                  child: CircularProgressIndicator(),
-                );
+                return const Center(child: CircularProgressIndicator());
               }
 
               final docs = snapshot.data!.docs;
@@ -638,7 +662,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   // Results count
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     color: Theme.of(context).colorScheme.surfaceContainerLow,
                     child: Row(
                       children: [
@@ -652,7 +679,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           '${docs.length} document${docs.length == 1 ? '' : 's'}${_hasActiveQuery ? ' (filtered)' : ''}',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -665,7 +694,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
-                                  _hasActiveQuery ? Icons.filter_list_off : Icons.folder_off,
+                                  _hasActiveQuery
+                                      ? Icons.filter_list_off
+                                      : Icons.folder_off,
                                   size: 48,
                                   color: Theme.of(context).colorScheme.outline,
                                 ),
@@ -675,7 +706,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ? 'No documents match your query'
                                       : 'No documents in this collection',
                                   style: TextStyle(
-                                    color: Theme.of(context).colorScheme.outline,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.outline,
                                   ),
                                 ),
                                 if (_hasActiveQuery) ...[
@@ -697,7 +730,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 leading: const Icon(Icons.description),
                                 title: Text(doc.id),
                                 subtitle: Text('${doc.data().length} fields'),
-                                onTap: () => _onDocumentSelected(doc.reference.path),
+                                onTap: () =>
+                                    _onDocumentSelected(doc.reference.path),
                               );
                             },
                           ),
@@ -713,10 +747,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showAddCollectionDialog() {
     final controller = TextEditingController();
+    final rootContext = context;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Add Collection'),
         content: TextField(
           controller: controller,
@@ -728,34 +763,32 @@ class _HomeScreenState extends State<HomeScreen> {
           autofocus: true,
           onSubmitted: (value) async {
             if (value.trim().isNotEmpty) {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               await _service.addCollection(value.trim());
               setState(() {});
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Collection "${value.trim()}" added')),
-                );
-              }
+              if (!rootContext.mounted) return;
+              ScaffoldMessenger.of(rootContext).showSnackBar(
+                SnackBar(content: Text('Collection "${value.trim()}" added')),
+              );
             }
           },
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () async {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 await _service.addCollection(name);
                 setState(() {});
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Collection "$name" added')),
-                  );
-                }
+                if (!rootContext.mounted) return;
+                ScaffoldMessenger.of(rootContext).showSnackBar(
+                  SnackBar(content: Text('Collection "$name" added')),
+                );
               }
             },
             child: const Text('Add'),
@@ -810,11 +843,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   actions: [
                                     TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
                                       child: const Text('Cancel'),
                                     ),
                                     FilledButton(
-                                      onPressed: () => Navigator.pop(context, true),
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
                                       child: const Text('Remove'),
                                     ),
                                   ],
@@ -879,10 +914,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   'created': FieldValue.serverTimestamp(),
                 });
               } else {
-                await _service.setDocument(
-                  '$_selectedCollectionPath/$id',
-                  {'created': FieldValue.serverTimestamp()},
-                );
+                await _service.setDocument('$_selectedCollectionPath/$id', {
+                  'created': FieldValue.serverTimestamp(),
+                });
               }
             },
             child: const Text('Add'),
