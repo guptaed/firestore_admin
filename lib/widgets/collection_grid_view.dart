@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../services/firestore_admin_service.dart';
@@ -32,6 +36,7 @@ class _CollectionGridViewState extends State<CollectionGridView> {
   final Map<String, double> _columnWidths = <String, double>{};
   String? _sortKey;
   bool _sortAscending = true;
+  bool _isExporting = false;
 
   @override
   void dispose() {
@@ -127,6 +132,78 @@ class _CollectionGridViewState extends State<CollectionGridView> {
     return sorted;
   }
 
+  dynamic _valueForColumn(_GridRow row, String key) {
+    if (key == _docIdSortKey) {
+      return row.documentId;
+    }
+    if (key == _pathSortKey) {
+      return row.path;
+    }
+    return row.values[key];
+  }
+
+  String _csvEscape(String value) {
+    final escaped = value.replaceAll('"', '""');
+    return '"$escaped"';
+  }
+
+  String _exportCellText(dynamic value) {
+    return widget.service.formatGridCellValue(value, maxLength: 1000000);
+  }
+
+  Future<void> _exportCsv({
+    required List<_GridColumn> columns,
+    required List<_GridRow> rows,
+  }) async {
+    if (_isExporting) return;
+
+    setState(() => _isExporting = true);
+    try {
+      final timestamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-');
+      final saveLocation = await getSaveLocation(
+        suggestedName: 'firestore_grid_$timestamp.csv',
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'CSV files', extensions: ['csv']),
+        ],
+      );
+
+      if (saveLocation == null) {
+        return;
+      }
+
+      final csv = StringBuffer();
+      csv.writeln(columns.map((c) => _csvEscape(c.label)).join(','));
+      for (final row in rows) {
+        final values = columns
+            .map((column) {
+              final value = _valueForColumn(row, column.keyName);
+              return _csvEscape(_exportCellText(value));
+            })
+            .join(',');
+        csv.writeln(values);
+      }
+
+      final file = File(saveLocation.path);
+      await file.writeAsString(csv.toString(), encoding: utf8);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('CSV exported: ${saveLocation.path}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('CSV export failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final rows = widget.docs
@@ -183,6 +260,27 @@ class _CollectionGridViewState extends State<CollectionGridView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Row(
+            children: [
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: _isExporting
+                    ? null
+                    : () => _exportCsv(columns: columns, rows: sortedRows),
+                icon: _isExporting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download),
+                label: Text(_isExporting ? 'Exporting...' : 'Export CSV'),
+              ),
+            ],
+          ),
+        ),
         if (hiddenCount > 0)
           Container(
             width: double.infinity,
