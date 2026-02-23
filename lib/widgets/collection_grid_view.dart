@@ -29,6 +29,7 @@ class _CollectionGridViewState extends State<CollectionGridView> {
 
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
+  final Map<String, double> _columnWidths = <String, double>{};
   String? _sortKey;
   bool _sortAscending = true;
 
@@ -49,6 +50,32 @@ class _CollectionGridViewState extends State<CollectionGridView> {
       }
     });
   }
+
+  void _syncColumnWidths(List<_GridColumn> columns) {
+    final activeKeys = columns.map((c) => c.keyName).toSet();
+    _columnWidths.removeWhere((key, _) => !activeKeys.contains(key));
+    for (final column in columns) {
+      _columnWidths.putIfAbsent(column.keyName, () => column.defaultWidth);
+    }
+  }
+
+  double _effectiveWidth(_GridColumn column) {
+    final width = _columnWidths[column.keyName] ?? column.defaultWidth;
+    return width.clamp(column.minWidth, 2000).toDouble();
+  }
+
+  void _resizeColumn(String keyName, double delta) {
+    setState(() {
+      final column = _allColumnsByKey[keyName];
+      if (column == null) return;
+      final current = _columnWidths[keyName] ?? column.defaultWidth;
+      _columnWidths[keyName] = (current + delta)
+          .clamp(column.minWidth, 2000)
+          .toDouble();
+    });
+  }
+
+  Map<String, _GridColumn> _allColumnsByKey = const <String, _GridColumn>{};
 
   int _compareValues(dynamic a, dynamic b) {
     if (a == null && b == null) return 0;
@@ -126,17 +153,31 @@ class _CollectionGridViewState extends State<CollectionGridView> {
       const _GridColumn(
         keyName: _docIdSortKey,
         label: 'Document ID',
-        width: 180,
+        defaultWidth: 180,
+        minWidth: 120,
       ),
-      const _GridColumn(keyName: _pathSortKey, label: 'Path', width: 300),
+      const _GridColumn(
+        keyName: _pathSortKey,
+        label: 'Path',
+        defaultWidth: 300,
+        minWidth: 180,
+      ),
       ...visibleColumns.map(
-        (column) => _GridColumn(keyName: column, label: column, width: 220),
+        (column) => _GridColumn(
+          keyName: column,
+          label: column,
+          defaultWidth: 220,
+          minWidth: 120,
+        ),
       ),
     ];
 
+    _allColumnsByKey = {for (final column in columns) column.keyName: column};
+    _syncColumnWidths(columns);
+
     final tableWidth = columns.fold<double>(
       0,
-      (totalWidth, column) => totalWidth + column.width,
+      (totalWidth, column) => totalWidth + _effectiveWidth(column),
     );
 
     return Column(
@@ -174,9 +215,11 @@ class _CollectionGridViewState extends State<CollectionGridView> {
                       children: [
                         _GridHeader(
                           columns: columns,
+                          columnWidthFor: _effectiveWidth,
                           sortKey: _sortKey,
                           sortAscending: _sortAscending,
                           onSort: _toggleSort,
+                          onResize: _resizeColumn,
                         ),
                         const Divider(height: 1),
                         Expanded(
@@ -198,6 +241,7 @@ class _CollectionGridViewState extends State<CollectionGridView> {
                                       widget.onDocumentSelected(row.path),
                                   child: _GridDataRow(
                                     columns: columns,
+                                    columnWidthFor: _effectiveWidth,
                                     row: row,
                                     service: widget.service,
                                   ),
@@ -221,53 +265,102 @@ class _CollectionGridViewState extends State<CollectionGridView> {
 
 class _GridHeader extends StatelessWidget {
   final List<_GridColumn> columns;
+  final double Function(_GridColumn column) columnWidthFor;
   final String? sortKey;
   final bool sortAscending;
   final ValueChanged<String> onSort;
+  final void Function(String keyName, double delta) onResize;
 
   const _GridHeader({
     required this.columns,
+    required this.columnWidthFor,
     required this.sortKey,
     required this.sortAscending,
     required this.onSort,
+    required this.onResize,
   });
 
   @override
   Widget build(BuildContext context) {
     final headerColor = Theme.of(context).colorScheme.surfaceContainerHighest;
+    final borderColor = Theme.of(context).dividerColor.withValues(alpha: 0.9);
 
     return Container(
       height: 46,
       color: headerColor,
       child: Row(
         children: columns
-            .map((column) {
+            .asMap()
+            .entries
+            .map((entry) {
+              final index = entry.key;
+              final column = entry.value;
+              final width = columnWidthFor(column);
               final isActive = sortKey == column.keyName;
-              return InkWell(
-                onTap: () => onSort(column.keyName),
-                child: Container(
-                  width: column.width,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  alignment: Alignment.centerLeft,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          column.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+              return Container(
+                width: width,
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: index == 0
+                        ? BorderSide(color: borderColor, width: 1)
+                        : BorderSide.none,
+                    right: BorderSide(color: borderColor, width: 1),
+                  ),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: InkWell(
+                        onTap: () => onSort(column.keyName),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  column.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              if (isActive)
+                                Icon(
+                                  sortAscending
+                                      ? Icons.arrow_drop_up
+                                      : Icons.arrow_drop_down,
+                                  size: 18,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                      if (isActive)
-                        Icon(
-                          sortAscending
-                              ? Icons.arrow_drop_up
-                              : Icons.arrow_drop_down,
-                          size: 18,
+                    ),
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.resizeColumn,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onHorizontalDragUpdate: (details) {
+                            onResize(column.keyName, details.delta.dx);
+                          },
+                          child: Container(
+                            width: 12,
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              width: 1,
+                              color: borderColor.withValues(alpha: 0.8),
+                            ),
+                          ),
                         ),
-                    ],
-                  ),
+                      ),
+                    ),
+                  ],
                 ),
               );
             })
@@ -279,29 +372,44 @@ class _GridHeader extends StatelessWidget {
 
 class _GridDataRow extends StatelessWidget {
   final List<_GridColumn> columns;
+  final double Function(_GridColumn column) columnWidthFor;
   final _GridRow row;
   final FirestoreAdminService service;
 
   const _GridDataRow({
     required this.columns,
+    required this.columnWidthFor,
     required this.row,
     required this.service,
   });
 
   @override
   Widget build(BuildContext context) {
+    final borderColor = Theme.of(context).dividerColor.withValues(alpha: 0.8);
     return SizedBox(
       height: 42,
       child: Row(
         children: columns
-            .map((column) {
+            .asMap()
+            .entries
+            .map((entry) {
+              final index = entry.key;
+              final column = entry.value;
               final cellValue = _valueForColumn(column.keyName);
               final cellText = service.formatGridCellValue(cellValue);
 
               return Container(
-                width: column.width,
+                width: columnWidthFor(column),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 alignment: Alignment.centerLeft,
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: index == 0
+                        ? BorderSide(color: borderColor, width: 1)
+                        : BorderSide.none,
+                    right: BorderSide(color: borderColor, width: 1),
+                  ),
+                ),
                 child: Tooltip(
                   message: cellText,
                   child: Text(
@@ -331,12 +439,14 @@ class _GridDataRow extends StatelessWidget {
 class _GridColumn {
   final String keyName;
   final String label;
-  final double width;
+  final double defaultWidth;
+  final double minWidth;
 
   const _GridColumn({
     required this.keyName,
     required this.label,
-    required this.width,
+    required this.defaultWidth,
+    this.minWidth = 100,
   });
 }
 
