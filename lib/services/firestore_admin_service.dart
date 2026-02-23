@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// A wrapper to return filtered query results with the same interface
@@ -11,7 +13,8 @@ class _FilteredQuerySnapshot implements QuerySnapshot<Map<String, dynamic>> {
   List<QueryDocumentSnapshot<Map<String, dynamic>>> get docs => _docs;
 
   @override
-  List<DocumentChange<Map<String, dynamic>>> get docChanges => _original.docChanges;
+  List<DocumentChange<Map<String, dynamic>>> get docChanges =>
+      _original.docChanges;
 
   @override
   SnapshotMetadata get metadata => _original.metadata;
@@ -114,13 +117,15 @@ class FirestoreAdminService {
 
   /// Stream documents in a collection
   Stream<QuerySnapshot<Map<String, dynamic>>> streamCollection(
-      String collectionPath) {
+    String collectionPath,
+  ) {
     return _firestore.collection(collectionPath).snapshots();
   }
 
   /// Get all documents in a collection
   Future<QuerySnapshot<Map<String, dynamic>>> getDocuments(
-      String collectionPath) {
+    String collectionPath,
+  ) {
     return _firestore.collection(collectionPath).get();
   }
 
@@ -135,8 +140,12 @@ class FirestoreAdminService {
     Query<Map<String, dynamic>> query = _firestore.collection(collectionPath);
 
     // Separate server-side and client-side conditions
-    final serverConditions = conditions.where((c) => !c.operator.isClientSide).toList();
-    final clientConditions = conditions.where((c) => c.operator.isClientSide).toList();
+    final serverConditions = conditions
+        .where((c) => !c.operator.isClientSide)
+        .toList();
+    final clientConditions = conditions
+        .where((c) => c.operator.isClientSide)
+        .toList();
 
     // Apply server-side where conditions
     for (final condition in serverConditions) {
@@ -175,7 +184,10 @@ class FirestoreAdminService {
   }
 
   /// Check if a document matches a client-side condition
-  bool _matchesClientCondition(Map<String, dynamic> data, QueryCondition condition) {
+  bool _matchesClientCondition(
+    Map<String, dynamic> data,
+    QueryCondition condition,
+  ) {
     final fieldValue = _getNestedField(data, condition.field);
 
     if (fieldValue == null) {
@@ -185,9 +197,13 @@ class FirestoreAdminService {
     switch (condition.operator) {
       case QueryOperator.stringContains:
         if (fieldValue is String) {
-          return fieldValue.toLowerCase().contains(condition.value.toLowerCase());
+          return fieldValue.toLowerCase().contains(
+            condition.value.toLowerCase(),
+          );
         }
-        return fieldValue.toString().toLowerCase().contains(condition.value.toLowerCase());
+        return fieldValue.toString().toLowerCase().contains(
+          condition.value.toLowerCase(),
+        );
       default:
         return false;
     }
@@ -233,7 +249,8 @@ class FirestoreAdminService {
       case QueryOperator.startsWith:
         // Firestore prefix query using >= and <
         final prefix = value.toString();
-        final prefixEnd = prefix.substring(0, prefix.length - 1) +
+        final prefixEnd =
+            prefix.substring(0, prefix.length - 1) +
             String.fromCharCode(prefix.codeUnitAt(prefix.length - 1) + 1);
         return query
             .where(field, isGreaterThanOrEqualTo: prefix)
@@ -252,25 +269,29 @@ class FirestoreAdminService {
 
   /// Get a single document by path
   Future<DocumentSnapshot<Map<String, dynamic>>> getDocument(
-      String documentPath) {
+    String documentPath,
+  ) {
     return _firestore.doc(documentPath).get();
   }
 
   /// Stream a single document
   Stream<DocumentSnapshot<Map<String, dynamic>>> streamDocument(
-      String documentPath) {
+    String documentPath,
+  ) {
     return _firestore.doc(documentPath).snapshots();
   }
 
   /// Update a document field
   Future<void> updateField(
-      String documentPath, String fieldName, dynamic value) {
+    String documentPath,
+    String fieldName,
+    dynamic value,
+  ) {
     return _firestore.doc(documentPath).update({fieldName: value});
   }
 
   /// Update entire document
-  Future<void> updateDocument(
-      String documentPath, Map<String, dynamic> data) {
+  Future<void> updateDocument(String documentPath, Map<String, dynamic> data) {
     return _firestore.doc(documentPath).update(data);
   }
 
@@ -281,13 +302,14 @@ class FirestoreAdminService {
 
   /// Add a new document to a collection
   Future<DocumentReference<Map<String, dynamic>>> addDocument(
-      String collectionPath, Map<String, dynamic> data) {
+    String collectionPath,
+    Map<String, dynamic> data,
+  ) {
     return _firestore.collection(collectionPath).add(data);
   }
 
   /// Set a document with a specific ID
-  Future<void> setDocument(
-      String documentPath, Map<String, dynamic> data) {
+  Future<void> setDocument(String documentPath, Map<String, dynamic> data) {
     return _firestore.doc(documentPath).set(data);
   }
 
@@ -340,6 +362,72 @@ class FirestoreAdminService {
     return value.toString();
   }
 
+  /// Flatten nested map fields for grid rendering using dot notation.
+  /// Example: {"a": {"b": 1}} -> {"a.b": 1}
+  Map<String, dynamic> flattenForGrid(
+    Map<String, dynamic> data, {
+    int maxDepth = 2,
+  }) {
+    final flattened = <String, dynamic>{};
+
+    void visit(String path, dynamic value, int depth) {
+      if (value is Map<String, dynamic> && depth < maxDepth) {
+        if (value.isEmpty) {
+          if (path.isNotEmpty) flattened[path] = value;
+          return;
+        }
+        for (final entry in value.entries) {
+          final nextPath = path.isEmpty ? entry.key : '$path.${entry.key}';
+          visit(nextPath, entry.value, depth + 1);
+        }
+        return;
+      }
+
+      if (path.isNotEmpty) {
+        flattened[path] = value;
+      }
+    }
+
+    for (final entry in data.entries) {
+      visit(entry.key, entry.value, 0);
+    }
+
+    return flattened;
+  }
+
+  /// Extract unique, sorted grid columns from flattened rows.
+  List<String> extractGridColumns(Iterable<Map<String, dynamic>> rows) {
+    final columns = <String>{};
+    for (final row in rows) {
+      columns.addAll(row.keys);
+    }
+
+    final sorted = columns.toList();
+    sorted.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return sorted;
+  }
+
+  /// Format a value for a compact grid cell.
+  String formatGridCellValue(dynamic value, {int maxLength = 160}) {
+    String text;
+    if (value is Timestamp || value is GeoPoint || value is DocumentReference) {
+      text = formatValue(value);
+    } else if (value is Map || value is List) {
+      try {
+        text = jsonEncode(value);
+      } catch (_) {
+        text = formatValue(value);
+      }
+    } else {
+      text = formatValue(value);
+    }
+
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return '${text.substring(0, maxLength - 3)}...';
+  }
+
   /// Parse a string value to the appropriate Firestore type
   static dynamic parseValue(String input, String targetType) {
     switch (targetType) {
@@ -365,7 +453,9 @@ class FirestoreAdminService {
 
     final results = <SearchResult>[];
     final lowerSearchTerm = searchTerm.toLowerCase();
-    final collectionsToSearch = _collectionsLoaded ? _collections : _defaultCollections;
+    final collectionsToSearch = _collectionsLoaded
+        ? _collections
+        : _defaultCollections;
 
     for (final collection in collectionsToSearch) {
       try {
@@ -376,24 +466,28 @@ class FirestoreAdminService {
 
           // Check document ID
           if (doc.id.toLowerCase().contains(lowerSearchTerm)) {
-            matchedFields.add(MatchedField(
-              fieldName: '(Document ID)',
-              fieldValue: doc.id,
-              fieldType: 'string',
-            ));
+            matchedFields.add(
+              MatchedField(
+                fieldName: '(Document ID)',
+                fieldValue: doc.id,
+                fieldType: 'string',
+              ),
+            );
           }
 
           // Check all fields
           _searchInMap(doc.data(), lowerSearchTerm, matchedFields, '');
 
           if (matchedFields.isNotEmpty) {
-            results.add(SearchResult(
-              collection: collection,
-              documentId: doc.id,
-              documentPath: doc.reference.path,
-              matchedFields: matchedFields,
-              data: doc.data(),
-            ));
+            results.add(
+              SearchResult(
+                collection: collection,
+                documentId: doc.id,
+                documentPath: doc.reference.path,
+                matchedFields: matchedFields,
+                data: doc.data(),
+              ),
+            );
           }
         }
       } catch (e) {
@@ -420,19 +514,23 @@ class FirestoreAdminService {
 
       if (value is String) {
         if (value.toLowerCase().contains(searchTerm)) {
-          matches.add(MatchedField(
-            fieldName: fieldPath,
-            fieldValue: value,
-            fieldType: 'string',
-          ));
+          matches.add(
+            MatchedField(
+              fieldName: fieldPath,
+              fieldValue: value,
+              fieldType: 'string',
+            ),
+          );
         }
       } else if (value is num) {
         if (value.toString().contains(searchTerm)) {
-          matches.add(MatchedField(
-            fieldName: fieldPath,
-            fieldValue: value.toString(),
-            fieldType: 'number',
-          ));
+          matches.add(
+            MatchedField(
+              fieldName: fieldPath,
+              fieldValue: value.toString(),
+              fieldType: 'number',
+            ),
+          );
         }
       } else if (value is Map<String, dynamic>) {
         _searchInMap(value, searchTerm, matches, fieldPath);
@@ -440,17 +538,21 @@ class FirestoreAdminService {
         for (var i = 0; i < value.length; i++) {
           final item = value[i];
           if (item is String && item.toLowerCase().contains(searchTerm)) {
-            matches.add(MatchedField(
-              fieldName: '$fieldPath[$i]',
-              fieldValue: item,
-              fieldType: 'string',
-            ));
+            matches.add(
+              MatchedField(
+                fieldName: '$fieldPath[$i]',
+                fieldValue: item,
+                fieldType: 'string',
+              ),
+            );
           } else if (item is num && item.toString().contains(searchTerm)) {
-            matches.add(MatchedField(
-              fieldName: '$fieldPath[$i]',
-              fieldValue: item.toString(),
-              fieldType: 'number',
-            ));
+            matches.add(
+              MatchedField(
+                fieldName: '$fieldPath[$i]',
+                fieldValue: item.toString(),
+                fieldType: 'number',
+              ),
+            );
           } else if (item is Map<String, dynamic>) {
             _searchInMap(item, searchTerm, matches, '$fieldPath[$i]');
           }
@@ -529,7 +631,8 @@ class QueryCondition {
 
   /// Parse the value to the appropriate type for Firestore
   dynamic get parsedValue {
-    if (operator == QueryOperator.isNull || operator == QueryOperator.isNotNull) {
+    if (operator == QueryOperator.isNull ||
+        operator == QueryOperator.isNotNull) {
       return null;
     }
 
@@ -549,7 +652,8 @@ class QueryCondition {
 
   @override
   String toString() {
-    if (operator == QueryOperator.isNull || operator == QueryOperator.isNotNull) {
+    if (operator == QueryOperator.isNull ||
+        operator == QueryOperator.isNotNull) {
       return '$field ${operator.symbol}';
     }
     return '$field ${operator.symbol} "$value"';
