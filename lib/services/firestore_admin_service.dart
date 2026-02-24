@@ -313,6 +313,253 @@ class FirestoreAdminService {
     return _firestore.doc(documentPath).set(data);
   }
 
+  /// Capture a JSON-serializable snapshot for the selected collections.
+  Future<SnapshotData> createSnapshot({
+    required List<String> collections,
+  }) async {
+    final selectedCollections = collections.toSet().toList()..sort();
+    final counts = <String, int>{};
+    final collectionPayload = <String, List<Map<String, dynamic>>>{};
+
+    for (final collection in selectedCollections) {
+      final snapshot = await _firestore.collection(collection).get();
+      counts[collection] = snapshot.size;
+
+      collectionPayload[collection] = snapshot.docs
+          .map(
+            (doc) => {
+              'id': doc.id,
+              'data': _serializeSnapshotValue(doc.data()),
+            },
+          )
+          .toList();
+    }
+
+    final payload = <String, dynamic>{
+      'snapshotVersion': 1,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'collections': collectionPayload,
+    };
+
+    return SnapshotData(payload: payload, documentCounts: counts);
+  }
+
+  /// Preview restore impact against current Firestore state.
+  Future<SnapshotPreview> previewSnapshotRestore(
+    Map<String, dynamic> payload,
+  ) async {
+    final parsedCollections = _parseSnapshotCollections(payload);
+    final details = <SnapshotCollectionPreview>[];
+
+    for (final entry in parsedCollections.entries) {
+      final collection = entry.key;
+      final snapshotDocCount = entry.value.length;
+      final existing = await _firestore.collection(collection).get();
+      details.add(
+        SnapshotCollectionPreview(
+          collection: collection,
+          snapshotDocumentCount: snapshotDocCount,
+          existingDocumentCount: existing.size,
+        ),
+      );
+    }
+
+    return SnapshotPreview(collections: details);
+  }
+
+  /// Restore snapshot payload into Firestore.
+  /// If [clearCollectionsBeforeRestore] is true, all existing docs in each
+  /// target collection are deleted first.
+  Future<SnapshotRestoreResult> restoreSnapshot(
+    Map<String, dynamic> payload, {
+    bool clearCollectionsBeforeRestore = false,
+  }) async {
+    final parsedCollections = _parseSnapshotCollections(payload);
+
+    var deletedCount = 0;
+    var upsertedCount = 0;
+
+    for (final entry in parsedCollections.entries) {
+      final collection = entry.key;
+      final snapshotDocuments = entry.value;
+      final collectionRef = _firestore.collection(collection);
+
+      if (clearCollectionsBeforeRestore) {
+        final existingSnapshot = await collectionRef.get();
+        deletedCount += existingSnapshot.size;
+
+        var batch = _firestore.batch();
+        var batchCount = 0;
+        for (final doc in existingSnapshot.docs) {
+          batch.delete(doc.reference);
+          batchCount++;
+          if (batchCount >= 400) {
+            await batch.commit();
+            batch = _firestore.batch();
+            batchCount = 0;
+          }
+        }
+        if (batchCount > 0) {
+          await batch.commit();
+        }
+      }
+
+      var setBatch = _firestore.batch();
+      var setBatchCount = 0;
+      for (final item in snapshotDocuments) {
+        final id = item['id'];
+        final data = item['data'];
+        if (id is! String || data is! Map<String, dynamic>) {
+          continue;
+        }
+
+        final decoded = _deserializeSnapshotValue(data);
+        if (decoded is! Map<String, dynamic>) {
+          continue;
+        }
+
+        setBatch.set(collectionRef.doc(id), decoded);
+        setBatchCount++;
+        upsertedCount++;
+
+        if (setBatchCount >= 400) {
+          await setBatch.commit();
+          setBatch = _firestore.batch();
+          setBatchCount = 0;
+        }
+      }
+      if (setBatchCount > 0) {
+        await setBatch.commit();
+      }
+    }
+
+    return SnapshotRestoreResult(
+      collectionsProcessed: parsedCollections.length,
+      deletedDocuments: deletedCount,
+      upsertedDocuments: upsertedCount,
+      clearCollectionsBeforeRestore: clearCollectionsBeforeRestore,
+    );
+  }
+
+  Map<String, List<Map<String, dynamic>>> _parseSnapshotCollections(
+    Map<String, dynamic> payload,
+  ) {
+    final collectionsNode = payload['collections'];
+    if (collectionsNode is! Map) {
+      throw const FormatException('Snapshot JSON missing "collections" object');
+    }
+
+    final parsed = <String, List<Map<String, dynamic>>>{};
+    for (final entry in collectionsNode.entries) {
+      final collection = entry.key.toString();
+      final rawList = entry.value;
+      if (rawList is! List) {
+        continue;
+      }
+
+      final docs = <Map<String, dynamic>>[];
+      for (final item in rawList) {
+        if (item is! Map) continue;
+        final normalized = <String, dynamic>{};
+        item.forEach((k, v) => normalized[k.toString()] = v);
+        docs.add(normalized);
+      }
+
+      parsed[collection] = docs;
+    }
+
+    return parsed;
+  }
+
+  dynamic _serializeSnapshotValue(dynamic value) {
+    if (value is Timestamp) {
+      return {
+        '__vf_type': 'timestamp',
+        'value': value.toDate().toUtc().toIso8601String(),
+      };
+    }
+    if (value is GeoPoint) {
+      return {
+        '__vf_type': 'geopoint',
+        'latitude': value.latitude,
+        'longitude': value.longitude,
+      };
+    }
+    if (value is DocumentReference) {
+      return {'__vf_type': 'reference', 'path': value.path};
+    }
+    if (value is Blob) {
+      return {'__vf_type': 'blob', 'bytesBase64': base64Encode(value.bytes)};
+    }
+    if (value is Map) {
+      final result = <String, dynamic>{};
+      for (final entry in value.entries) {
+        result[entry.key.toString()] = _serializeSnapshotValue(entry.value);
+      }
+      return result;
+    }
+    if (value is List) {
+      return value.map(_serializeSnapshotValue).toList();
+    }
+    return value;
+  }
+
+  dynamic _deserializeSnapshotValue(dynamic value) {
+    if (value is List) {
+      return value.map(_deserializeSnapshotValue).toList();
+    }
+    if (value is! Map) {
+      return value;
+    }
+
+    final map = <String, dynamic>{};
+    value.forEach((k, v) => map[k.toString()] = v);
+
+    final marker = map['__vf_type'];
+    if (marker is String) {
+      switch (marker) {
+        case 'timestamp':
+          final iso = map['value'];
+          if (iso is String) {
+            final parsed = DateTime.tryParse(iso);
+            if (parsed != null) {
+              return Timestamp.fromDate(parsed.toUtc());
+            }
+          }
+          break;
+        case 'geopoint':
+          final lat = map['latitude'];
+          final lng = map['longitude'];
+          if (lat is num && lng is num) {
+            return GeoPoint(lat.toDouble(), lng.toDouble());
+          }
+          break;
+        case 'reference':
+          final path = map['path'];
+          if (path is String && path.isNotEmpty) {
+            return _firestore.doc(path);
+          }
+          break;
+        case 'blob':
+          final bytesBase64 = map['bytesBase64'];
+          if (bytesBase64 is String) {
+            try {
+              return Blob(base64Decode(bytesBase64));
+            } catch (_) {
+              return bytesBase64;
+            }
+          }
+          break;
+      }
+    }
+
+    final decoded = <String, dynamic>{};
+    map.forEach((k, v) {
+      decoded[k] = _deserializeSnapshotValue(v);
+    });
+    return decoded;
+  }
+
   /// Get subcollections of a document (returns known subcollection names)
   /// Note: Firestore client SDK doesn't support listing subcollections
   /// This would need to be enhanced based on your data model
@@ -658,4 +905,52 @@ class QueryCondition {
     }
     return '$field ${operator.symbol} "$value"';
   }
+}
+
+class SnapshotData {
+  final Map<String, dynamic> payload;
+  final Map<String, int> documentCounts;
+
+  SnapshotData({required this.payload, required this.documentCounts});
+
+  int get totalDocuments =>
+      documentCounts.values.fold(0, (total, docTotal) => total + docTotal);
+}
+
+class SnapshotCollectionPreview {
+  final String collection;
+  final int snapshotDocumentCount;
+  final int existingDocumentCount;
+
+  SnapshotCollectionPreview({
+    required this.collection,
+    required this.snapshotDocumentCount,
+    required this.existingDocumentCount,
+  });
+}
+
+class SnapshotPreview {
+  final List<SnapshotCollectionPreview> collections;
+
+  SnapshotPreview({required this.collections});
+
+  int get snapshotTotalDocuments =>
+      collections.fold(0, (total, item) => total + item.snapshotDocumentCount);
+
+  int get existingTotalDocuments =>
+      collections.fold(0, (total, item) => total + item.existingDocumentCount);
+}
+
+class SnapshotRestoreResult {
+  final int collectionsProcessed;
+  final int deletedDocuments;
+  final int upsertedDocuments;
+  final bool clearCollectionsBeforeRestore;
+
+  SnapshotRestoreResult({
+    required this.collectionsProcessed,
+    required this.deletedDocuments,
+    required this.upsertedDocuments,
+    required this.clearCollectionsBeforeRestore,
+  });
 }

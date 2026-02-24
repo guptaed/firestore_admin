@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/firestore_admin_service.dart';
@@ -225,6 +229,339 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _onSnapshotActionSelected(String action) {
+    if (action == 'export') {
+      _runSnapshotExportFlow();
+    } else if (action == 'restore') {
+      _runSnapshotRestoreFlow();
+    }
+  }
+
+  Future<void> _runSnapshotExportFlow() async {
+    final collections = await _showSnapshotCollectionSelectorDialog();
+    if (collections == null || collections.isEmpty) {
+      return;
+    }
+
+    try {
+      final snapshotData = await _service.createSnapshot(
+        collections: collections,
+      );
+
+      final timestamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-');
+      final saveLocation = await getSaveLocation(
+        suggestedName: 'firestore_snapshot_$timestamp.json',
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'JSON files', extensions: ['json']),
+        ],
+      );
+      if (saveLocation == null) {
+        return;
+      }
+
+      final jsonText = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(snapshotData.payload);
+      await File(saveLocation.path).writeAsString(jsonText, encoding: utf8);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Snapshot exported (${snapshotData.totalDocuments} docs) to ${saveLocation.path}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Snapshot export failed: $e')));
+    }
+  }
+
+  Future<void> _runSnapshotRestoreFlow() async {
+    try {
+      final selected = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'JSON files', extensions: ['json']),
+        ],
+      );
+      if (selected == null) {
+        return;
+      }
+
+      final raw = await File(selected.path).readAsString();
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        throw const FormatException('Snapshot file root must be a JSON object');
+      }
+
+      final payload = <String, dynamic>{};
+      decoded.forEach((k, v) => payload[k.toString()] = v);
+      final preview = await _service.previewSnapshotRestore(payload);
+      if (preview.collections.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Snapshot has no collection data to restore'),
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      var clearBeforeRestore = false;
+      var restoring = false;
+      String? restoreError;
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Restore Snapshot'),
+              content: SizedBox(
+                width: 640,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('File: ${selected.path}'),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Collections: ${preview.collections.length} | '
+                      'Snapshot docs: ${preview.snapshotTotalDocuments} | '
+                      'Current docs in target collections: ${preview.existingTotalDocuments}',
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 220,
+                      child: ListView.builder(
+                        itemCount: preview.collections.length,
+                        itemBuilder: (context, index) {
+                          final item = preview.collections[index];
+                          return ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.folder_copy_outlined),
+                            title: Text(item.collection),
+                            subtitle: Text(
+                              'Snapshot: ${item.snapshotDocumentCount}, '
+                              'Current: ${item.existingDocumentCount}',
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text(
+                        'Clear each target collection before restore',
+                      ),
+                      subtitle: const Text(
+                        'If enabled, existing docs in target collections will be deleted first.',
+                      ),
+                      value: clearBeforeRestore,
+                      onChanged: restoring
+                          ? null
+                          : (value) {
+                              setDialogState(() {
+                                clearBeforeRestore = value ?? false;
+                              });
+                            },
+                    ),
+                    if (restoreError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          restoreError!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: restoring
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: restoring
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            restoring = true;
+                            restoreError = null;
+                          });
+                          try {
+                            final result = await _service.restoreSnapshot(
+                              payload,
+                              clearCollectionsBeforeRestore: clearBeforeRestore,
+                            );
+                            if (!mounted) return;
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext);
+                            }
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Snapshot restored. Collections: ${result.collectionsProcessed}, '
+                                  'upserted: ${result.upsertedDocuments}, deleted: ${result.deletedDocuments}',
+                                ),
+                              ),
+                            );
+                          } catch (e) {
+                            setDialogState(() {
+                              restoring = false;
+                              restoreError = 'Restore failed: $e';
+                            });
+                          }
+                        },
+                  icon: restoring
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.restore),
+                  label: Text(restoring ? 'Restoring...' : 'Restore'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Snapshot restore failed: $e')));
+    }
+  }
+
+  Future<List<String>?> _showSnapshotCollectionSelectorDialog() async {
+    final allCollections = _service.getRootCollections();
+    final selected = allCollections.toSet();
+    final filterController = TextEditingController();
+    var filterText = '';
+
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final visibleCollections = allCollections
+              .where(
+                (c) => filterText.isEmpty
+                    ? true
+                    : c.toLowerCase().contains(filterText.toLowerCase()),
+              )
+              .toList();
+
+          return AlertDialog(
+            title: const Text('Export Snapshot'),
+            content: SizedBox(
+              width: 560,
+              height: 420,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: filterController,
+                    decoration: const InputDecoration(
+                      labelText: 'Filter collections',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() {
+                        filterText = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: () {
+                          setDialogState(() {
+                            selected.addAll(visibleCollections);
+                          });
+                        },
+                        icon: const Icon(Icons.select_all, size: 16),
+                        label: const Text('Select Visible'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () {
+                          setDialogState(() {
+                            selected.removeAll(visibleCollections);
+                          });
+                        },
+                        icon: const Icon(Icons.deselect, size: 16),
+                        label: const Text('Clear Visible'),
+                      ),
+                      const Spacer(),
+                      Text('${selected.length} selected'),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: visibleCollections.length,
+                      itemBuilder: (context, index) {
+                        final collection = visibleCollections[index];
+                        return CheckboxListTile(
+                          dense: true,
+                          title: Text(collection),
+                          value: selected.contains(collection),
+                          onChanged: (checked) {
+                            setDialogState(() {
+                              if (checked == true) {
+                                selected.add(collection);
+                              } else {
+                                selected.remove(collection);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: selected.isEmpty
+                    ? null
+                    : () => Navigator.pop(
+                        dialogContext,
+                        selected.toList()..sort(),
+                      ),
+                icon: const Icon(Icons.upload_file),
+                label: const Text('Export'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    filterController.dispose();
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -287,6 +624,33 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh Collections',
             onPressed: _refreshCollections,
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Snapshots',
+            icon: const Icon(Icons.backup_table),
+            onSelected: _onSnapshotActionSelected,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'export',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload_file, size: 18),
+                    SizedBox(width: 8),
+                    Text('Export Snapshot (JSON)'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'restore',
+                child: Row(
+                  children: [
+                    Icon(Icons.download_for_offline, size: 18),
+                    SizedBox(width: 8),
+                    Text('Restore Snapshot (JSON)'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
