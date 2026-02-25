@@ -379,6 +379,10 @@ class FirestoreAdminService {
     var deletedCount = 0;
     var upsertedCount = 0;
 
+    // Safety guard: disable outbound notification channels before bulk writes
+    // so importing historical announcements never triggers live email/push.
+    await _disableNotificationDeliveryForBulkOperation();
+
     for (final entry in parsedCollections.entries) {
       final collection = entry.key;
       final snapshotDocuments = entry.value;
@@ -418,7 +422,13 @@ class FirestoreAdminService {
           continue;
         }
 
-        setBatch.set(collectionRef.doc(id), decoded);
+        final preparedData = _enforceNotificationDisabledForBulkImport(
+          collection: collection,
+          documentId: id,
+          decodedData: decoded,
+        );
+
+        setBatch.set(collectionRef.doc(id), preparedData);
         setBatchCount++;
         upsertedCount++;
 
@@ -439,6 +449,36 @@ class FirestoreAdminService {
       upsertedDocuments: upsertedCount,
       clearCollectionsBeforeRestore: clearCollectionsBeforeRestore,
     );
+  }
+
+  Future<void> _disableNotificationDeliveryForBulkOperation() async {
+    await _firestore.collection('AppConfig').doc('email').set({
+      'ConfigKey': 'email',
+      'EnableEmailNotifications': false,
+      'EnablePushNotifications': false,
+      'LastModifiedBy': 'firestore_admin',
+      'LastModifiedByName': 'Snapshot Restore',
+      'LastModifiedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Map<String, dynamic> _enforceNotificationDisabledForBulkImport({
+    required String collection,
+    required String documentId,
+    required Map<String, dynamic> decodedData,
+  }) {
+    if (collection != 'AppConfig' || documentId != 'email') {
+      return decodedData;
+    }
+
+    final merged = Map<String, dynamic>.from(decodedData);
+    merged['ConfigKey'] = 'email';
+    merged['EnableEmailNotifications'] = false;
+    merged['EnablePushNotifications'] = false;
+    merged['LastModifiedBy'] = 'firestore_admin';
+    merged['LastModifiedByName'] = 'Snapshot Restore';
+    merged['LastModifiedAt'] = FieldValue.serverTimestamp();
+    return merged;
   }
 
   Map<String, List<Map<String, dynamic>>> _parseSnapshotCollections(
