@@ -560,17 +560,27 @@ class FirestoreAdminService {
     return decoded;
   }
 
-  /// Get subcollections of a document (returns known subcollection names)
+  /// Get subcollections of a document (returns known subcollection names).
   /// Note: Firestore client SDK doesn't support listing subcollections
-  /// This would need to be enhanced based on your data model
-  List<String> getKnownSubcollections(String parentCollection) {
-    // Define known subcollections based on your data model
-    switch (parentCollection) {
-      case 'Suppliers':
-        return ['history'];
-      default:
-        return [];
+  /// dynamically, so this is an explicit data-model map.
+  List<String> getKnownSubcollectionsForDocument(String documentPath) {
+    final segments = documentPath.split('/');
+    if (segments.length < 2) return [];
+
+    final parentCollection = segments[segments.length - 2];
+    final documentId = segments.last;
+
+    // Define known subcollections based on your data model.
+    if (parentCollection == 'Suppliers') {
+      return ['history'];
     }
+
+    if (parentCollection == 'AppConfig' &&
+        documentId == 'notification_templates') {
+      return ['templates'];
+    }
+
+    return [];
   }
 
   /// Convert Firestore value to display string with type info

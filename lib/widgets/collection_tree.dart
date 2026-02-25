@@ -22,6 +22,7 @@ class CollectionTree extends StatefulWidget {
 
 class _CollectionTreeState extends State<CollectionTree> {
   final Set<String> _expandedCollections = {};
+  final Set<String> _expandedDocuments = {};
 
   @override
   Widget build(BuildContext context) {
@@ -31,56 +32,63 @@ class _CollectionTreeState extends State<CollectionTree> {
       itemCount: collections.length,
       itemBuilder: (context, index) {
         final collection = collections[index];
-        return _buildCollectionNode(collection, collection);
+        return _buildCollectionNode(collection, collection, indent: 0);
       },
     );
   }
 
-  Widget _buildCollectionNode(String name, String path) {
+  Widget _buildCollectionNode(
+    String name,
+    String path, {
+    required double indent,
+  }) {
     final isExpanded = _expandedCollections.contains(path);
     final isSelected = widget.selectedPath == path;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          onTap: () {
-            widget.onCollectionSelected(path);
-          },
-          child: Container(
-            color: isSelected
-                ? Theme.of(context).colorScheme.primaryContainer
-                : null,
-            child: Row(
-              children: [
-                IconButton(
-                  icon: Icon(
-                    isExpanded ? Icons.expand_more : Icons.chevron_right,
-                    size: 20,
+        Padding(
+          padding: EdgeInsets.only(left: indent),
+          child: InkWell(
+            onTap: () {
+              widget.onCollectionSelected(path);
+            },
+            child: Container(
+              color: isSelected
+                  ? Theme.of(context).colorScheme.primaryContainer
+                  : null,
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      isExpanded ? Icons.expand_more : Icons.chevron_right,
+                      size: 20,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        if (isExpanded) {
+                          _expandedCollections.remove(path);
+                        } else {
+                          _expandedCollections.add(path);
+                        }
+                      });
+                    },
                   ),
-                  onPressed: () {
-                    setState(() {
-                      if (isExpanded) {
-                        _expandedCollections.remove(path);
-                      } else {
-                        _expandedCollections.add(path);
-                      }
-                    });
-                  },
-                ),
-                Icon(
-                  isExpanded ? Icons.folder_open : Icons.folder,
-                  size: 18,
-                  color: Colors.amber[700],
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    name,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  Icon(
+                    isExpanded ? Icons.folder_open : Icons.folder,
+                    size: 18,
+                    color: Colors.amber[700],
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      name,
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -137,31 +145,68 @@ class _CollectionTreeState extends State<CollectionTree> {
             final docPath = doc.reference.path;
             final isSelected = widget.selectedPath == docPath;
 
-            return InkWell(
-              onTap: () => widget.onDocumentSelected(docPath),
-              child: Container(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primaryContainer
-                    : null,
-                padding: const EdgeInsets.only(left: 40, top: 4, bottom: 4),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.description,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.primary,
+            final subcollections = widget.service
+                .getKnownSubcollectionsForDocument(docPath);
+            final hasSubcollections = subcollections.isNotEmpty;
+            final isDocExpanded = _expandedDocuments.contains(docPath);
+
+            return Column(
+              children: [
+                InkWell(
+                  onTap: () => widget.onDocumentSelected(docPath),
+                  child: Container(
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    padding: const EdgeInsets.only(left: 40, top: 4, bottom: 4),
+                    child: Row(
+                      children: [
+                        if (hasSubcollections)
+                          IconButton(
+                            icon: Icon(
+                              isDocExpanded
+                                  ? Icons.expand_more
+                                  : Icons.chevron_right,
+                              size: 18,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                if (isDocExpanded) {
+                                  _expandedDocuments.remove(docPath);
+                                } else {
+                                  _expandedDocuments.add(docPath);
+                                }
+                              });
+                            },
+                          )
+                        else
+                          const SizedBox(width: 40),
+                        Icon(
+                          Icons.description,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            doc.id,
+                            style: const TextStyle(fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        doc.id,
-                        style: const TextStyle(fontSize: 13),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                if (hasSubcollections && isDocExpanded)
+                  ...subcollections.map(
+                    (subcollection) => _buildCollectionNode(
+                      subcollection,
+                      '$docPath/$subcollection',
+                      indent: 72,
+                    ),
+                  ),
+              ],
             );
           }).toList(),
         );
