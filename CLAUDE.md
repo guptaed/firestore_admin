@@ -7,7 +7,7 @@ A standalone Flutter Windows desktop app for browsing and managing the Firestore
 - **Location**: `c:\src\firestore_admin`
 - **Platform**: Windows desktop only
 - **Firebase Project**: vietfuelprocapp (shares config with `c:\src\gemini001`)
-- **Authentication**: None (direct Firestore access)
+- **Authentication**: Firebase Auth (email/password) — required by Firestore security rules
 
 ## Architecture
 
@@ -103,7 +103,7 @@ build\windows\x64\runner\Release\firestore_admin.exe
 - Export/import documents as JSON
 - Batch operations (bulk delete, bulk update)
 - Dark/light theme toggle
-- Firebase Authentication integration
+- ~~Firebase Authentication integration~~ (done)
 - Subcollection navigation
 - Copy document to another collection
 - Undo/redo for edits
