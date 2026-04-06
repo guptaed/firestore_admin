@@ -50,7 +50,7 @@ class _FieldEditorState extends State<FieldEditor> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<String>(
-              value: _selectedType,
+              initialValue: _selectedType,
               decoration: const InputDecoration(
                 labelText: 'Type',
                 border: OutlineInputBorder(),

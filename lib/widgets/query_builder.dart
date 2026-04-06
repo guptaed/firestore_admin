@@ -222,7 +222,7 @@ class _QueryBuilderState extends State<QueryBuilder> {
                 child: _isLoadingFields
                     ? const LinearProgressIndicator()
                     : DropdownButtonFormField<String>(
-                        value: _selectedField,
+                        initialValue: _selectedField,
                         decoration: const InputDecoration(
                           hintText: 'Select field',
                           isDense: true,
@@ -249,7 +249,7 @@ class _QueryBuilderState extends State<QueryBuilder> {
               SizedBox(
                 width: 140,
                 child: DropdownButtonFormField<QueryOperator>(
-                  value: _selectedOperator,
+                  initialValue: _selectedOperator,
                   decoration: const InputDecoration(
                     isDense: true,
                     border: OutlineInputBorder(),
@@ -290,7 +290,7 @@ class _QueryBuilderState extends State<QueryBuilder> {
                 SizedBox(
                   width: 100,
                   child: DropdownButtonFormField<String>(
-                    value: _selectedValueType,
+                    initialValue: _selectedValueType,
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
@@ -364,7 +364,7 @@ class _QueryBuilderState extends State<QueryBuilder> {
                   SizedBox(
                     width: 150,
                     child: DropdownButtonFormField<String>(
-                      value: _orderByController.text.isEmpty ? null : _orderByController.text,
+                      initialValue: _orderByController.text.isEmpty ? null : _orderByController.text,
                       decoration: const InputDecoration(
                         hintText: 'Select field',
                         isDense: true,

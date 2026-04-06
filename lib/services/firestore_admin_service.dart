@@ -36,18 +36,31 @@ class FirestoreAdminService {
 
   // Default collections (fallback if Firestore config doesn't exist)
   static const List<String> _defaultCollections = [
-    'Suppliers',
-    'SupplierHistory',
     'Announcements',
-    'Bids',
-    'Shipments',
-    'Contracts',
-    'Banks',
-    'CreditChecks',
-    'CreditCheckHistory',
-    'Smartphoneaccess',
-    'BidFlows',
+    'AppConfig',
     'audit_trails',
+    'BankHistory',
+    'Banks',
+    'BidFlows',
+    'Bids',
+    'ContractHistory',
+    'Contracts',
+    'Counters',
+    'CreditCheckHistory',
+    'CreditChecks',
+    'ErexEntities',
+    'FuelTypes',
+    'NotificationLog',
+    'Payments',
+    'QAInspections',
+    'Roles',
+    'Shipments',
+    'Smartphoneaccess',
+    'supplier_applications',
+    'SupplierHistory',
+    'Suppliers',
+    'SupportTickets',
+    'WebUsers',
   ];
 
   // Dynamic list of collections (loaded from Firestore)
@@ -94,19 +107,35 @@ class FirestoreAdminService {
     });
   }
 
-  /// Add a new collection to the list
-  Future<void> addCollection(String name) async {
-    if (!_collections.contains(name)) {
-      _collections.add(name);
-      _collections.sort();
+  /// Add a new collection to the list.
+  /// Returns null on success, or an error message string on failure.
+  Future<String?> addCollection(String name) async {
+    if (_collections.contains(name)) return null;
+    _collections.add(name);
+    _collections.sort();
+    try {
       await _saveCollectionsToFirestore();
+      return null;
+    } catch (e) {
+      // Roll back in-memory change so state stays consistent with Firestore
+      _collections.remove(name);
+      return 'Failed to save collection list: $e';
     }
   }
 
-  /// Remove a collection from the list
-  Future<void> removeCollection(String name) async {
+  /// Remove a collection from the list.
+  /// Returns null on success, or an error message string on failure.
+  Future<String?> removeCollection(String name) async {
     _collections.remove(name);
-    await _saveCollectionsToFirestore();
+    try {
+      await _saveCollectionsToFirestore();
+      return null;
+    } catch (e) {
+      // Roll back in-memory change
+      _collections.add(name);
+      _collections.sort();
+      return 'Failed to save collection list: $e';
+    }
   }
 
   /// Refresh collections from Firestore
@@ -381,74 +410,89 @@ class FirestoreAdminService {
 
     // Safety guard: disable outbound notification channels before bulk writes
     // so importing historical announcements never triggers live email/push.
+    // Notifications are always re-enabled in the finally block below.
     await _disableNotificationDeliveryForBulkOperation();
+    try {
+      for (final entry in parsedCollections.entries) {
+        final collection = entry.key;
+        final snapshotDocuments = entry.value;
+        final collectionRef = _firestore.collection(collection);
 
-    for (final entry in parsedCollections.entries) {
-      final collection = entry.key;
-      final snapshotDocuments = entry.value;
-      final collectionRef = _firestore.collection(collection);
+        if (clearCollectionsBeforeRestore) {
+          final existingSnapshot = await collectionRef.get();
+          deletedCount += existingSnapshot.size;
 
-      if (clearCollectionsBeforeRestore) {
-        final existingSnapshot = await collectionRef.get();
-        deletedCount += existingSnapshot.size;
-
-        var batch = _firestore.batch();
-        var batchCount = 0;
-        for (final doc in existingSnapshot.docs) {
-          batch.delete(doc.reference);
-          batchCount++;
-          if (batchCount >= 400) {
+          var batch = _firestore.batch();
+          var batchCount = 0;
+          for (final doc in existingSnapshot.docs) {
+            batch.delete(doc.reference);
+            batchCount++;
+            if (batchCount >= 400) {
+              await batch.commit();
+              batch = _firestore.batch();
+              batchCount = 0;
+            }
+          }
+          if (batchCount > 0) {
             await batch.commit();
-            batch = _firestore.batch();
-            batchCount = 0;
           }
         }
-        if (batchCount > 0) {
-          await batch.commit();
+
+        var setBatch = _firestore.batch();
+        var setBatchCount = 0;
+        for (final item in snapshotDocuments) {
+          final id = item['id'];
+          final data = item['data'];
+          if (id is! String || data is! Map<String, dynamic>) {
+            continue;
+          }
+
+          final decoded = _deserializeSnapshotValue(data);
+          if (decoded is! Map<String, dynamic>) {
+            continue;
+          }
+
+          final preparedData = _enforceNotificationDisabledForBulkImport(
+            collection: collection,
+            documentId: id,
+            decodedData: decoded,
+          );
+
+          setBatch.set(collectionRef.doc(id), preparedData);
+          setBatchCount++;
+          upsertedCount++;
+
+          if (setBatchCount >= 400) {
+            await setBatch.commit();
+            setBatch = _firestore.batch();
+            setBatchCount = 0;
+          }
         }
-      }
-
-      var setBatch = _firestore.batch();
-      var setBatchCount = 0;
-      for (final item in snapshotDocuments) {
-        final id = item['id'];
-        final data = item['data'];
-        if (id is! String || data is! Map<String, dynamic>) {
-          continue;
-        }
-
-        final decoded = _deserializeSnapshotValue(data);
-        if (decoded is! Map<String, dynamic>) {
-          continue;
-        }
-
-        final preparedData = _enforceNotificationDisabledForBulkImport(
-          collection: collection,
-          documentId: id,
-          decodedData: decoded,
-        );
-
-        setBatch.set(collectionRef.doc(id), preparedData);
-        setBatchCount++;
-        upsertedCount++;
-
-        if (setBatchCount >= 400) {
+        if (setBatchCount > 0) {
           await setBatch.commit();
-          setBatch = _firestore.batch();
-          setBatchCount = 0;
         }
       }
-      if (setBatchCount > 0) {
-        await setBatch.commit();
-      }
-    }
 
-    return SnapshotRestoreResult(
-      collectionsProcessed: parsedCollections.length,
-      deletedDocuments: deletedCount,
-      upsertedDocuments: upsertedCount,
-      clearCollectionsBeforeRestore: clearCollectionsBeforeRestore,
-    );
+      return SnapshotRestoreResult(
+        collectionsProcessed: parsedCollections.length,
+        deletedDocuments: deletedCount,
+        upsertedDocuments: upsertedCount,
+        clearCollectionsBeforeRestore: clearCollectionsBeforeRestore,
+      );
+    } finally {
+      // Always re-enable notifications whether restore succeeded or failed.
+      await _reenableNotificationDelivery();
+    }
+  }
+
+  Future<void> _reenableNotificationDelivery() async {
+    await _firestore.collection('AppConfig').doc('email').set({
+      'EnableEmailNotifications': true,
+      'EnablePushNotifications': true,
+      'LastModifiedBy': 'firestore_admin',
+      'LastModifiedByName': 'Snapshot Restore',
+      'LastModifiedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> _disableNotificationDeliveryForBulkOperation() async {

@@ -203,20 +203,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final results = await _service.searchAllCollections(term);
+      // Discard results if the user has already started a newer search
+      if (!mounted || _searchTerm != term) return;
       setState(() {
         _searchResults = results;
         _isSearchLoading = false;
       });
     } catch (e) {
+      if (!mounted || _searchTerm != term) return;
       setState(() {
         _searchResults = [];
         _isSearchLoading = false;
       });
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Search error: $e')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Search error: $e')),
+      );
     }
   }
 
@@ -1183,9 +1184,31 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showAddCollectionDialog() {
     final controller = TextEditingController();
 
+    Future<void> submit(String name, BuildContext dialogContext) async {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) return;
+      Navigator.pop(dialogContext);
+      controller.dispose();
+      final error = await _service.addCollection(trimmed);
+      if (!mounted) return;
+      if (error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not add "$trimmed": $error'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      } else {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Collection "$trimmed" added')),
+        );
+      }
+    }
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Add Collection'),
         content: TextField(
           controller: controller,
@@ -1195,38 +1218,18 @@ class _HomeScreenState extends State<HomeScreen> {
             border: OutlineInputBorder(),
           ),
           autofocus: true,
-          onSubmitted: (value) async {
-            if (value.trim().isNotEmpty) {
-              Navigator.pop(context);
-              await _service.addCollection(value.trim());
-              setState(() {});
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Collection "${value.trim()}" added')),
-                );
-              }
-            }
-          },
+          onSubmitted: (value) => submit(value, dialogContext),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              controller.dispose();
+            },
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () async {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                Navigator.pop(context);
-                await _service.addCollection(name);
-                setState(() {});
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Collection "$name" added')),
-                  );
-                }
-              }
-            },
+            onPressed: () => submit(controller.text, dialogContext),
             child: const Text('Add'),
           ),
         ],
@@ -1235,10 +1238,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showManageCollectionsDialog() {
+    final screenMessenger = ScaffoldMessenger.of(context);
+    final screenErrorColor = Theme.of(context).colorScheme.error;
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
+      builder: (dlgContext) => StatefulBuilder(
+        builder: (dlgContext, setDialogState) {
           final collections = _service.getRootCollections();
           return AlertDialog(
             title: const Text('Manage Collections'),
@@ -1252,14 +1257,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Collections are stored in Firestore at _config/collections',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Theme.of(context).colorScheme.outline,
+                      color: Theme.of(dlgContext).colorScheme.outline,
                     ),
                   ),
                   const SizedBox(height: 16),
                   Expanded(
                     child: ListView.builder(
                       itemCount: collections.length,
-                      itemBuilder: (context, index) {
+                      itemBuilder: (itemContext, index) {
                         final collection = collections[index];
                         return ListTile(
                           leading: const Icon(Icons.folder),
@@ -1269,8 +1274,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             tooltip: 'Remove from list',
                             onPressed: () async {
                               final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
+                                context: dlgContext,
+                                builder: (confirmContext) => AlertDialog(
                                   title: const Text('Remove Collection?'),
                                   content: Text(
                                     'Remove "$collection" from the list?\n\n'
@@ -1280,21 +1285,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                   actions: [
                                     TextButton(
                                       onPressed: () =>
-                                          Navigator.pop(context, false),
+                                          Navigator.pop(confirmContext, false),
                                       child: const Text('Cancel'),
                                     ),
                                     FilledButton(
                                       onPressed: () =>
-                                          Navigator.pop(context, true),
+                                          Navigator.pop(confirmContext, true),
                                       child: const Text('Remove'),
                                     ),
                                   ],
                                 ),
                               );
                               if (confirm == true) {
-                                await _service.removeCollection(collection);
-                                setDialogState(() {});
-                                setState(() {});
+                                final error = await _service.removeCollection(collection);
+                                if (!mounted) return;
+                                if (error != null) {
+                                  screenMessenger.showSnackBar(SnackBar(
+                                    content: Text('Could not remove "$collection": $error'),
+                                    backgroundColor: screenErrorColor,
+                                  ));
+                                } else {
+                                  setDialogState(() {});
+                                  setState(() {});
+                                }
                               }
                             },
                           ),
@@ -1307,7 +1320,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dlgContext),
                 child: const Text('Close'),
               ),
             ],
